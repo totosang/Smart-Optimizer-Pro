@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Optimizer - Original Quality Preserved</title>
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root { --primary: #8b3dff; --bg: #f3f4f9; --card-bg: #ffffff; --danger: #ff4d4d; }
+        body { font-family: 'Sarabun', sans-serif; background-color: var(--bg); margin: 0; display: flex; flex-direction: column; align-items: center; }
+        .app-header { width: 100%; background: white; padding: 15px 0; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 100; }
+        .container { width: 95%; max-width: 500px; padding: 20px 0; }
+        
+        .control-panel { background: var(--card-bg); border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .input-sync-row { display: flex; align-items: center; gap: 10px; }
+        input[type="range"] { flex: 1; accent-color: var(--primary); }
+        input[type="number"], select { padding: 12px; border-radius: 10px; border: 1px solid #ddd; font-size: 1rem; }
+        .num-input { width: 75px; text-align: center; }
+
+        .drop-zone { border: 2px dashed #d1d5db; border-radius: 16px; padding: 30px 20px; text-align: center; background: #fafafa; cursor: pointer; margin-bottom: 20px; }
+        .info-badge { background: #eef2ff; color: var(--primary); padding: 12px; border-radius: 8px; font-size: 0.9rem; text-align: center; font-weight: bold; }
+        
+        #page-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; width: 100%; }
+        .page-card { background: white; border-radius: 12px; padding: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); position: relative; }
+        .card-actions { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        .btn-icon { background: #eee; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .btn-del { color: var(--danger); }
+        .canvas-container-custom { display: flex; justify-content: center; align-items: center; background: #f0f0f0; border-radius: 8px; min-height: 150px; overflow: hidden; }
+        .kb-label { font-size: 11px; color: #333; margin-top: 8px; display: block; line-height: 1.4; }
+        .btn-main { background: var(--primary); color: white; padding: 16px; border-radius: 12px; border: none; font-size: 1.1rem; font-weight: bold; cursor: pointer; width: 100%; }
+    </style>
+</head>
+<body>
+
+    <div class="app-header"><h2>✨ Smart Optimizer Pro</h2></div>
+
+    <div class="container">
+        <div class="drop-zone" id="drop-zone">
+            <span style="font-size:2rem">📥</span><br>ลดขนาดไฟล์โดยรักษาคุณภาพเดิม
+        </div>
+        <input type="file" id="file-input" multiple accept="image/*,application/pdf" style="display:none">
+
+        <div class="control-panel">
+            <div class="control-group">
+                <label>📉 ปรับลดจำนวนพิกเซล (%)</label>
+                <div class="input-sync-row">
+                    <input type="range" id="size-slider" min="1" max="100" value="100" oninput="syncInputs('slider')">
+                    <input type="number" id="size-num" min="1" max="100" value="100" class="num-input" oninput="syncInputs('num')">
+                    <span>%</span>
+                </div>
+            </div>
+            <div class="control-group">
+                <label>📂 ฟอร์แมตส่งออก</label>
+                <select id="export-format">
+                    <option value="image/jpeg">JPG</option>
+                    <option value="image/png">PNG</option>
+                    <option value="pdf">PDF</option>
+                </select>
+            </div>
+            <div class="info-badge" id="optimizer-summary">เพิ่มไฟล์เพื่อคำนวณตามสเกลจริง</div>
+            <button class="btn-main" onclick="handleExport()">💾 ดาวน์โหลด</button>
+        </div>
+
+        <div id="page-list"></div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        let fileData = [];
+        const fileInput = document.getElementById('file-input');
+        const dropZone = document.getElementById('drop-zone');
+
+        function formatUnit(kb) {
+            const n = parseFloat(kb);
+            return `${n.toLocaleString(undefined, {minimumFractionDigits:1})} Kb (${(n/1024).toFixed(2)} Mb)`;
+        }
+
+        function syncInputs(src) {
+            const s = document.getElementById('size-slider'), n = document.getElementById('size-num');
+            if(src === 'slider') n.value = s.value; else s.value = n.value;
+            updateOptimizerInfo();
+        }
+
+        ['dragover', 'dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, e => {
+            e.preventDefault(); e.stopPropagation();
+            if(ev === 'drop') handleFiles(e.dataTransfer.files);
+        }));
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        async function handleFiles(files) {
+            for (const file of files) {
+                const origKb = (file.size / 1024).toFixed(1);
+                
+                if (file.type === 'application/pdf') {
+                    const pdf = await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise;
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const vp = page.getViewport({scale: 2.0});
+                        const canvas = document.createElement('canvas');
+                        canvas.width = vp.width; canvas.height = vp.height;
+                        await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+                        // ใช้ Blob URL เพื่อรักษาความเสถียรของข้อมูล
+                        const blob = await new Promise(r => canvas.toBlob(r, 'image/png', 1.0));
+                        fabric.Image.fromURL(URL.createObjectURL(blob), img => addToFileData(img, `P${i}_${file.name}`, origKb));
+                    }
+                } else {
+                    const url = URL.createObjectURL(file);
+                    fabric.Image.fromURL(url, img => addToFileData(img, file.name, origKb));
+                }
+            }
+        }
+
+        function addToFileData(fImg, fName, oKb) {
+            const id = 'id-' + Math.random().toString(36).substr(2, 9);
+            const item = { id, img: fImg, name: fName, rotation: 0, origKb: parseFloat(oKb) };
+            fileData.push(item);
+            const card = document.createElement('div');
+            card.className = 'page-card'; card.id = `card-${id}`;
+            card.innerHTML = `<div class="card-actions"><button class="btn-icon" onclick="rotateItem('${id}')">🔄</button><button class="btn-icon btn-del" onclick="removeItem('${id}')">❌</button></div><div class="canvas-container-custom"><canvas id="canvas-${id}"></canvas></div><span class="kb-label" id="label-${id}"></span>`;
+            document.getElementById('page-list').appendChild(card);
+            updateOptimizerInfo();
+        }
+
+        function updateOptimizerInfo() {
+            const pct = document.getElementById('size-slider').value / 100;
+            const dimScale = Math.sqrt(pct);
+
+            fileData.forEach(item => {
+                const canvasEl = document.getElementById(`canvas-${item.id}`);
+                const fCanvas = new fabric.StaticCanvas(canvasEl);
+                const isRot = (item.rotation / 90) % 2 !== 0;
+                const finalS = (150 / Math.max(item.img.width, item.img.height)) * dimScale;
+
+                const w = (isRot ? item.img.height : item.img.width) * finalS;
+                const h = (isRot ? item.img.width : item.img.height) * finalS;
+                fCanvas.setDimensions({ width: w, height: h });
+                
+                const tImg = fabric.util.object.clone(item.img);
+                tImg.set({ angle: item.rotation, originX: 'center', originY: 'center', left: w/2, top: h/2 });
+                tImg.scale(finalS);
+                fCanvas.add(tImg); fCanvas.renderAll();
+
+                const estKb = (item.origKb * pct).toFixed(1);
+                document.getElementById(`label-${item.id}`).innerHTML = `ต้นฉบับ: ${formatUnit(item.origKb)}<br>ปรับแล้ว: <b>${formatUnit(estKb)}</b>`;
+            });
+
+            const total = fileData.reduce((s, f) => s + (f.origKb * pct), 0);
+            document.getElementById('optimizer-summary').innerText = `รวมปรับแล้ว: ${formatUnit(total.toFixed(1))}`;
+        }
+
+        window.rotateItem = (id) => {
+            const item = fileData.find(f => f.id === id);
+            item.rotation = (item.rotation - 90) % 360;
+            updateOptimizerInfo();
+        };
+
+        window.removeItem = (id) => {
+            fileData = fileData.filter(f => f.id !== id);
+            document.getElementById(`card-${id}`).remove();
+            updateOptimizerInfo();
+        };
+
+        async function handleExport() {
+            if (fileData.length === 0) return alert("กรุณาเพิ่มไฟล์!");
+            const pct = document.getElementById('size-slider').value / 100;
+            const dimScale = Math.sqrt(pct);
+            const fmt = document.getElementById('export-format').value;
+            const zip = new JSZip(), { PDFDocument } = PDFLib, pdfDoc = await PDFDocument.create();
+            let exported = [];
+
+            for (const item of fileData) {
+                const isRot = (item.rotation / 90) % 2 !== 0;
+                const w = (isRot ? item.img.height : item.img.width) * dimScale;
+                const h = (isRot ? item.img.width : item.img.height) * dimScale;
+
+                const tCanvas = document.createElement('canvas');
+                tCanvas.width = w; tCanvas.height = h;
+                const ctx = tCanvas.getContext('2d');
+                
+                // ใช้การวาดภาพคุณภาพสูงสุดเพื่อรักษา Bit Depth
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+
+                const fCanvas = new fabric.StaticCanvas(tCanvas);
+                const exImg = fabric.util.object.clone(item.img);
+                exImg.set({ angle: item.rotation, originX: 'center', originY: 'center', left: w/2, top: h/2 });
+                exImg.scale(dimScale);
+                fCanvas.add(exImg); fCanvas.renderAll();
+
+                // รักษาคุณภาพของไฟล์ในระดับสูงสุด
+                const quality = fmt === 'image/jpeg' ? 0.95 : 1.0;
+                const dataUrl = tCanvas.toDataURL(fmt === 'pdf' ? 'image/jpeg' : fmt, quality);
+                
+                if (fmt === 'pdf') {
+                    const page = pdfDoc.addPage([w, h]);
+                    page.drawImage(await pdfDoc.embedJpg(dataUrl), { x: 0, y: 0, width: w, height: h });
+                } else {
+                    exported.push({ name: `${item.name.split('.')[0]}_reduced.${fmt.split('/')[1]}`, data: dataUrl });
+                }
+            }
+
+            if (fmt === 'pdf') {
+                downloadBlob(new Blob([await pdfDoc.save()]), "optimized.pdf");
+            } else if (exported.length === 1) {
+                const a = document.createElement('a'); a.href = exported[0].data; a.download = exported[0].name; a.click();
+            } else {
+                exported.forEach(f => zip.file(f.name, f.data.split(',')[1], {base64: true}));
+                downloadBlob(await zip.generateAsync({type: "blob"}), "smart_optimized.zip");
+            }
+        }
+
+        function downloadBlob(b, n) { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = n; a.click(); }
+    </script>
+</body>
+</html>
